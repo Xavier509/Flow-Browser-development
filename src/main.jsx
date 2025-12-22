@@ -77,6 +77,7 @@ const FlowBrowser = () => {
   const [showBookmarks, setShowBookmarks] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [showMobileOptions, setShowMobileOptions] = useState(false);
   
   // Security and privacy state
   const [proxyEnabled, setProxyEnabled] = useState(false);
@@ -306,11 +307,22 @@ const FlowBrowser = () => {
   };
 
   const navigateToUrl = (url) => {
-    if (!url || url === 'about:blank') return;
+    if (!url || url.trim() === '') return;
     
-    let finalUrl = url;
-    if (!url.startsWith('http://') && !url.startsWith('https://') && !url.startsWith('about:')) {
-      finalUrl = 'https://' + url;
+    let finalUrl = url.trim();
+    
+    // Check if it's a URL or a search query
+    const isUrl = /^(https?:\/\/)|(www\.)|(\w+\.\w+)/.test(finalUrl) || finalUrl.startsWith('about:');
+    
+    if (finalUrl === 'about:blank') {
+      // Handle about:blank specially
+      finalUrl = 'about:blank';
+    } else if (!isUrl) {
+      // It's a search query - use Google search
+      finalUrl = 'https://www.google.com/search?q=' + encodeURIComponent(finalUrl);
+    } else if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://') && !finalUrl.startsWith('about:')) {
+      // It's a URL but missing protocol - add https://
+      finalUrl = 'https://' + finalUrl;
     }
 
     const currentWorkspace = workspaces[activeWorkspace];
@@ -322,7 +334,7 @@ const FlowBrowser = () => {
     updatedWorkspaces[activeWorkspace].tabs[activeTab] = {
       ...currentTab,
       url: finalUrl,
-      title: new URL(finalUrl).hostname || 'Loading...',
+      title: finalUrl === 'about:blank' ? 'New Tab' : (finalUrl.includes('google.com/search') ? 'Google Search' : (new URL(finalUrl).hostname || 'Loading...')),
       history: newHistory,
       historyIndex: newHistory.length - 1
     };
@@ -655,7 +667,7 @@ const FlowBrowser = () => {
           {/* More Options Button - Mobile Only */}
           {isMobile && (
             <button
-              onClick={() => setShowMenu(!showMenu)}
+              onClick={() => setShowMobileOptions(!showMobileOptions)}
               className="p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400"
             >
               <MoreVertical className="w-5 h-5" />
@@ -790,7 +802,7 @@ const FlowBrowser = () => {
                   Workspace: {currentWorkspace.name}
                 </p>
                 <p className="text-cyan-400/50 text-xs sm:text-sm">
-                  Enter a URL above to start browsing
+                  Enter a URL or search query above to start browsing
                 </p>
                 <div className="flex items-center gap-2 sm:gap-4 justify-center mt-4 sm:mt-8 flex-wrap">
                   {vpnEnabled && (
@@ -813,13 +825,44 @@ const FlowBrowser = () => {
               </div>
             </div>
           ) : (
-            <iframe
-              ref={iframeRef}
-              src={displayUrl}
-              className="w-full h-full border-0 bg-white"
-              sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox"
-              title="Browser Content"
-            />
+            <div className="w-full h-full flex flex-col">
+              <iframe
+                ref={iframeRef}
+                src={displayUrl}
+                className="w-full h-full border-0 bg-white"
+                title="Browser Content"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="no-referrer-when-downgrade"
+                onError={(e) => {
+                  console.log('Iframe error:', e);
+                }}
+              />
+              {/* Overlay message for CORS-blocked sites */}
+              <div className="absolute bottom-4 left-4 right-4 bg-slate-900/95 backdrop-blur-xl border border-cyan-500/30 rounded-lg p-3 sm:p-4 shadow-xl pointer-events-none">
+                <div className="flex items-start gap-2 sm:gap-3">
+                  <Globe className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 flex-shrink-0 mt-0.5" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs sm:text-sm text-cyan-400 font-medium mb-1">
+                      Loading: {currentTab.title}
+                    </p>
+                    <p className="text-xs text-cyan-400/60 truncate">
+                      {currentTab.url}
+                    </p>
+                    <p className="text-xs text-cyan-400/50 mt-2">
+                      Note: Some sites may block embedding. If the page appears blank, try clicking the URL to open in a new tab.
+                    </p>
+                  </div>
+                  <a
+                    href={currentTab.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-2 sm:px-3 py-1.5 sm:py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-lg text-xs whitespace-nowrap pointer-events-auto transition-colors"
+                  >
+                    Open ↗
+                  </a>
+                </div>
+              </div>
+            </div>
           )}
         </div>
 
@@ -1212,8 +1255,8 @@ const FlowBrowser = () => {
       )}
 
       {/* Mobile More Options Menu */}
-      {showMenu && isMobile && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-end" onClick={() => setShowMenu(false)}>
+      {showMobileOptions && isMobile && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-end" onClick={() => setShowMobileOptions(false)}>
           <div 
             className="w-full bg-slate-900 border-t border-cyan-500/30 rounded-t-2xl p-4 pb-8 safe-area-bottom"
             onClick={(e) => e.stopPropagation()}
@@ -1221,21 +1264,21 @@ const FlowBrowser = () => {
             <div className="w-12 h-1 bg-cyan-400/30 rounded-full mx-auto mb-4"></div>
             <div className="space-y-2">
               <button
-                onClick={() => { addBookmark(); setShowMenu(false); }}
+                onClick={() => { addBookmark(); setShowMobileOptions(false); }}
                 className="w-full flex items-center gap-3 p-4 rounded-lg bg-slate-800/50 text-cyan-400"
               >
                 <Star className="w-5 h-5" />
                 <span>Add Bookmark</span>
               </button>
               <button
-                onClick={() => { setShowAIPanel(true); setShowMenu(false); }}
+                onClick={() => { setShowAIPanel(true); setShowMobileOptions(false); }}
                 className="w-full flex items-center gap-3 p-4 rounded-lg bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/30 text-purple-400"
               >
                 <Sparkles className="w-5 h-5" />
                 <span>AI Assistant</span>
               </button>
               <button
-                onClick={() => { toggleProxy(); setShowMenu(false); }}
+                onClick={() => { toggleProxy(); setShowMobileOptions(false); }}
                 className={`w-full flex items-center gap-3 p-4 rounded-lg ${
                   proxyEnabled
                     ? 'bg-green-500/20 border border-green-500/30 text-green-400'
@@ -1247,7 +1290,7 @@ const FlowBrowser = () => {
               </button>
               {user && (
                 <button
-                  onClick={() => { setShowSettings(true); setShowMenu(false); }}
+                  onClick={() => { setShowSettings(true); setShowMobileOptions(false); }}
                   className="w-full flex items-center gap-3 p-4 rounded-lg bg-slate-800/50 text-cyan-400"
                 >
                   <Settings className="w-5 h-5" />
