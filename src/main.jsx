@@ -3,6 +3,9 @@ import ReactDOM from 'react-dom/client';
 import { Camera, Home, RefreshCw, ChevronLeft, ChevronRight, Star, Shield, Menu as MenuIcon, X, User, LogOut, Search, Plus, Settings, Lock, Globe, Eye, EyeOff, Sparkles, BookOpen, Zap, Brain, Users, Briefcase, Coffee, Gamepad2, GraduationCap, ShoppingBag, Copy, Check, FileText, MessageSquare, Languages, Volume2, Loader2, MoreVertical, Tablet } from 'lucide-react';
 import './index.css';
 
+// Check if running in Electron
+const isElectron = window.electronAPI?.isElectron || false;
+
 // Supabase Configuration
 const SUPABASE_URL = 'https://ttkttetepaqvexmhymvq.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0a3R0ZXRlcGFxdmV4bWh5bXZxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY0MzM4MTAsImV4cCI6MjA4MjAwOTgxMH0.7e1ZT-VOLm3P_V1ndcGSnP4oUtLkCwUwVQGuVkWuMdY';
@@ -42,9 +45,6 @@ const createClient = (url, key) => ({
 });
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-// Proxy service configuration
-const PROXY_ENDPOINT = 'https://api.allorigins.win/raw?url=';
 
 // VPN Providers Configuration
 const VPN_PROVIDERS = [
@@ -103,7 +103,6 @@ const FlowBrowser = () => {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResponse, setAiResponse] = useState('');
   const [aiQuestion, setAiQuestion] = useState('');
-  const [pageContent, setPageContent] = useState('');
   
   // Workspace management
   const [showWorkspaces, setShowWorkspaces] = useState(false);
@@ -112,8 +111,6 @@ const FlowBrowser = () => {
   // Responsive state
   const [isMobile, setIsMobile] = useState(false);
   const [isTablet, setIsTablet] = useState(false);
-  
-  const iframeRef = useRef(null);
 
   useEffect(() => {
     // Check viewport size
@@ -130,17 +127,40 @@ const FlowBrowser = () => {
       const loadingScreen = document.querySelector('.loading-screen');
       if (loadingScreen) {
         loadingScreen.style.opacity = '0';
-        loadingScreen.style.transition = 'opacity 0.3s ease-out';
-        setTimeout(() => {
-          loadingScreen.remove();
-        }, 300);
+        setTimeout(() => loadingScreen.remove(), 300);
       }
     }, 500);
 
     checkUser();
     loadBookmarks();
     loadWorkspaces();
-    initializePrivacyFeatures();
+
+    // Set up Electron event listeners
+    if (isElectron) {
+      window.electronAPI.onPageLoaded((data) => {
+        const currentWorkspace = workspaces[activeWorkspace];
+        const currentTab = currentWorkspace.tabs[activeTab];
+        const updatedWorkspaces = [...workspaces];
+        updatedWorkspaces[activeWorkspace].tabs[activeTab] = {
+          ...currentTab,
+          url: data.url,
+          title: data.title || data.url
+        };
+        setWorkspaces(updatedWorkspaces);
+        setUrlInput(data.url);
+      });
+
+      window.electronAPI.onPageTitleUpdated((title) => {
+        const currentWorkspace = workspaces[activeWorkspace];
+        const currentTab = currentWorkspace.tabs[activeTab];
+        const updatedWorkspaces = [...workspaces];
+        updatedWorkspaces[activeWorkspace].tabs[activeTab] = {
+          ...currentTab,
+          title: title
+        };
+        setWorkspaces(updatedWorkspaces);
+      });
+    }
 
     return () => {
       clearTimeout(timer);
@@ -177,35 +197,6 @@ const FlowBrowser = () => {
   const saveBookmarks = (newBookmarks) => {
     localStorage.setItem('flow_bookmarks', JSON.stringify(newBookmarks));
     setBookmarks(newBookmarks);
-  };
-
-  const initializePrivacyFeatures = () => {
-    if (antiFingerprint) {
-      try {
-        const originalToDataURL = HTMLCanvasElement.prototype.toDataURL;
-        HTMLCanvasElement.prototype.toDataURL = function(type) {
-          const context = this.getContext('2d');
-          const imageData = context.getImageData(0, 0, this.width, this.height);
-          for (let i = 0; i < imageData.data.length; i += 4) {
-            imageData.data[i] += Math.floor(Math.random() * 3) - 1;
-          }
-          context.putImageData(imageData, 0, 0);
-          return originalToDataURL.call(this, type);
-        };
-      } catch (e) {
-        console.log('Anti-fingerprinting initialization skipped');
-      }
-    }
-
-    if (autoDeleteCookies) {
-      window.addEventListener('beforeunload', () => {
-        document.cookie.split(";").forEach(cookie => {
-          const eqPos = cookie.indexOf("=");
-          const name = eqPos > -1 ? cookie.substr(0, eqPos) : cookie;
-          document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
-        });
-      });
-    }
   };
 
   const handleSignUp = async (e) => {
@@ -306,40 +297,39 @@ const FlowBrowser = () => {
     }
   };
 
-  const navigateToUrl = (url) => {
+  const navigateToUrl = async (url) => {
     if (!url || url.trim() === '') return;
     
-    let finalUrl = url.trim();
-    
-    // Check if it's a URL or a search query
-    const isUrl = /^(https?:\/\/)|(www\.)|(\w+\.\w+)/.test(finalUrl) || finalUrl.startsWith('about:');
-    
-    if (finalUrl === 'about:blank') {
-      // Handle about:blank specially
-      finalUrl = 'about:blank';
-    } else if (!isUrl) {
-      // It's a search query - use Google search
-      finalUrl = 'https://www.google.com/search?q=' + encodeURIComponent(finalUrl);
-    } else if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://') && !finalUrl.startsWith('about:')) {
-      // It's a URL but missing protocol - add https://
-      finalUrl = 'https://' + finalUrl;
+    if (isElectron) {
+      // Use Electron's BrowserView for navigation
+      const result = await window.electronAPI.navigate(url, {
+        proxyEnabled,
+        vpnEnabled,
+        blockTrackers,
+        antiFingerprint
+      });
+
+      if (result.success) {
+        const currentWorkspace = workspaces[activeWorkspace];
+        const currentTab = currentWorkspace.tabs[activeTab];
+        const newHistory = currentTab.history.slice(0, currentTab.historyIndex + 1);
+        newHistory.push(result.url);
+
+        const updatedWorkspaces = [...workspaces];
+        updatedWorkspaces[activeWorkspace].tabs[activeTab] = {
+          ...currentTab,
+          url: result.url,
+          title: result.title || 'Loading...',
+          history: newHistory,
+          historyIndex: newHistory.length - 1
+        };
+        saveWorkspaces(updatedWorkspaces);
+        setUrlInput(result.url);
+      }
+    } else {
+      // Fallback for web version (not recommended for production)
+      alert('This browser works best as an Electron app. Please use the desktop version for full functionality.');
     }
-
-    const currentWorkspace = workspaces[activeWorkspace];
-    const currentTab = currentWorkspace.tabs[activeTab];
-    const newHistory = currentTab.history.slice(0, currentTab.historyIndex + 1);
-    newHistory.push(finalUrl);
-
-    const updatedWorkspaces = [...workspaces];
-    updatedWorkspaces[activeWorkspace].tabs[activeTab] = {
-      ...currentTab,
-      url: finalUrl,
-      title: finalUrl === 'about:blank' ? 'New Tab' : (finalUrl.includes('google.com/search') ? 'Google Search' : (new URL(finalUrl).hostname || 'Loading...')),
-      history: newHistory,
-      historyIndex: newHistory.length - 1
-    };
-    saveWorkspaces(updatedWorkspaces);
-    setUrlInput(finalUrl);
   };
 
   const handleUrlSubmit = (e) => {
@@ -347,60 +337,26 @@ const FlowBrowser = () => {
     navigateToUrl(urlInput);
   };
 
-  const goBack = () => {
-    const currentWorkspace = workspaces[activeWorkspace];
-    const currentTab = currentWorkspace.tabs[activeTab];
-    
-    if (currentTab.historyIndex > 0) {
-      const newIndex = currentTab.historyIndex - 1;
-      const updatedWorkspaces = [...workspaces];
-      updatedWorkspaces[activeWorkspace].tabs[activeTab] = {
-        ...currentTab,
-        url: currentTab.history[newIndex],
-        historyIndex: newIndex
-      };
-      saveWorkspaces(updatedWorkspaces);
-      setUrlInput(currentTab.history[newIndex]);
+  const goBack = async () => {
+    if (isElectron) {
+      await window.electronAPI.goBack();
     }
   };
 
-  const goForward = () => {
-    const currentWorkspace = workspaces[activeWorkspace];
-    const currentTab = currentWorkspace.tabs[activeTab];
-    
-    if (currentTab.historyIndex < currentTab.history.length - 1) {
-      const newIndex = currentTab.historyIndex + 1;
-      const updatedWorkspaces = [...workspaces];
-      updatedWorkspaces[activeWorkspace].tabs[activeTab] = {
-        ...currentTab,
-        url: currentTab.history[newIndex],
-        historyIndex: newIndex
-      };
-      saveWorkspaces(updatedWorkspaces);
-      setUrlInput(currentTab.history[newIndex]);
+  const goForward = async () => {
+    if (isElectron) {
+      await window.electronAPI.goForward();
     }
   };
 
-  const reload = () => {
-    if (iframeRef.current) {
-      iframeRef.current.src = iframeRef.current.src;
+  const reload = async () => {
+    if (isElectron) {
+      await window.electronAPI.reload();
     }
   };
 
   const goHome = () => {
-    const updatedWorkspaces = [...workspaces];
-    const currentWorkspace = workspaces[activeWorkspace];
-    const currentTab = currentWorkspace.tabs[activeTab];
-    
-    updatedWorkspaces[activeWorkspace].tabs[activeTab] = {
-      ...currentTab,
-      url: 'about:blank',
-      title: 'New Tab',
-      history: [...currentTab.history, 'about:blank'],
-      historyIndex: currentTab.history.length
-    };
-    saveWorkspaces(updatedWorkspaces);
-    setUrlInput('');
+    navigateToUrl('about:blank');
   };
 
   const addBookmark = () => {
@@ -430,33 +386,15 @@ const FlowBrowser = () => {
     setVpnEnabled(!vpnEnabled);
   };
 
-  const getSecureUrl = (url) => {
-    if (url === 'about:blank' || url.startsWith('about:')) return url;
-    
-    let securedUrl = url;
-    
-    if (vpnEnabled) {
-      const provider = VPN_PROVIDERS.find(v => v.id === vpnProvider);
-      console.log('Routing through VPN:', provider.name);
-    }
-    
-    if (proxyEnabled) {
-      securedUrl = PROXY_ENDPOINT + encodeURIComponent(url);
-    }
-    
-    return securedUrl;
-  };
-
   // AI Assistant Functions
   const extractPageContent = async () => {
-    const currentWorkspace = workspaces[activeWorkspace];
-    const currentTab = currentWorkspace.tabs[activeTab];
-    
-    if (currentTab.url === 'about:blank') {
-      return 'No page loaded. Please navigate to a webpage first.';
+    if (isElectron) {
+      const result = await window.electronAPI.getPageContent();
+      if (result.success) {
+        return `Title: ${result.content.title}\nURL: ${result.content.url}\n\nContent:\n${result.content.text}`;
+      }
     }
-    
-    return `Content from ${currentTab.title} at ${currentTab.url}`;
+    return 'No page loaded. Please navigate to a webpage first.';
   };
 
   const callClaudeAPI = async (prompt, systemPrompt) => {
@@ -514,7 +452,7 @@ const FlowBrowser = () => {
     setAiLoading(true);
     const content = await extractPageContent();
     
-    const systemPrompt = "You are a helpful AI assistant that explains complex topics in simple, easy-to-understand language as if explaining to a 10-year-old.";
+    const systemPrompt = "You are a helpful AI assistant that explains complex topics in simple, easy-to-understand language.";
     const prompt = `Please explain this webpage content in simple terms:\n\n${content}`;
     
     const response = await callClaudeAPI(prompt, systemPrompt);
@@ -540,18 +478,17 @@ const FlowBrowser = () => {
 
   const currentWorkspace = workspaces[activeWorkspace];
   const currentTab = currentWorkspace.tabs[activeTab];
-  const displayUrl = getSecureUrl(currentTab.url);
   const WorkspaceIcon = currentWorkspace.icon;
 
   return (
     <div className="w-full h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="bg-black/40 backdrop-blur-xl border-b border-cyan-500/30 px-2 sm:px-4 py-2 sm:py-3 flex items-center gap-2 sm:gap-3 shadow-lg shadow-cyan-500/10">
+      <div className="bg-black/40 backdrop-blur-xl border-b border-cyan-500/30 px-2 sm:px-4 py-2 sm:py-3 flex items-center gap-2 sm:gap-3 shadow-lg shadow-cyan-500/10 relative z-50">
         {/* Mobile Menu Button */}
         {isMobile && (
           <button
-            onClick={() => setShowMobileMenu(!showMobileMenu)}
-            className="p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400"
+            onClick={() => setShowMobileMenu(true)}
+            className="p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 transition-colors"
           >
             <MenuIcon className="w-5 h-5" />
           </button>
@@ -586,27 +523,25 @@ const FlowBrowser = () => {
             <div className="flex gap-1">
               <button 
                 onClick={goBack}
-                disabled={currentTab.historyIndex === 0}
-                className="p-1.5 sm:p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 disabled:opacity-30"
+                className="p-1.5 sm:p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 transition-colors"
               >
                 <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
               <button 
                 onClick={goForward}
-                disabled={currentTab.historyIndex === currentTab.history.length - 1}
-                className="p-1.5 sm:p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 disabled:opacity-30"
+                className="p-1.5 sm:p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 transition-colors"
               >
                 <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
               <button 
                 onClick={reload}
-                className="p-1.5 sm:p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400"
+                className="p-1.5 sm:p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 transition-colors"
               >
                 <RefreshCw className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
               <button 
                 onClick={goHome}
-                className="p-1.5 sm:p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400"
+                className="p-1.5 sm:p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 transition-colors"
               >
                 <Home className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
@@ -616,7 +551,7 @@ const FlowBrowser = () => {
           {/* URL Bar */}
           <form onSubmit={handleUrlSubmit} className="flex-1 flex items-center gap-1 sm:gap-2">
             <div className="flex-1 relative">
-              <Search className="absolute left-2 sm:left-3 top-1/2 -translate-y-1/2 w-3 h-3 sm:w-4 sm:h-4 text-cyan-400/50" />
+              <Search className="absolute left-2 sm:left-3 top-1/2 -translate-y-1/2 w-3 h-3 sm:w-4 sm:h-4 text-cyan-400/50 pointer-events-none" />
               <input
                 type="text"
                 value={urlInput}
@@ -624,7 +559,7 @@ const FlowBrowser = () => {
                 placeholder={isMobile ? "URL..." : "Enter URL or search..."}
                 className="w-full bg-slate-800/50 text-cyan-100 pl-8 sm:pl-10 pr-8 sm:pr-10 py-1.5 sm:py-2.5 rounded-lg border border-cyan-500/30 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-400/20 placeholder-cyan-400/30 text-sm sm:text-base"
               />
-              <div className="absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 flex items-center gap-1">
+              <div className="absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 pointer-events-none">
                 {vpnEnabled && (
                   <Shield className="w-3 h-3 sm:w-4 sm:h-4 text-purple-400 animate-pulse" />
                 )}
@@ -640,18 +575,20 @@ const FlowBrowser = () => {
                 <button 
                   onClick={addBookmark}
                   type="button"
-                  className="p-2 rounded-lg bg-slate-800/50 hover:bg-yellow-500/20 text-cyan-400"
+                  className="p-2 rounded-lg bg-slate-800/50 hover:bg-yellow-500/20 text-cyan-400 transition-colors"
                 >
                   <Star className="w-5 h-5" />
                 </button>
                 <button
                   onClick={() => setShowAIPanel(!showAIPanel)}
-                  className="p-2 rounded-lg bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/30 text-purple-400"
+                  type="button"
+                  className="p-2 rounded-lg bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/30 text-purple-400 transition-colors"
                 >
                   <Sparkles className="w-5 h-5" />
                 </button>
                 <button
                   onClick={toggleProxy}
+                  type="button"
                   className={`p-2 rounded-lg transition-all ${
                     proxyEnabled 
                       ? 'bg-green-500/20 text-green-400 shadow-lg shadow-green-500/20 border border-green-500/30' 
@@ -668,7 +605,7 @@ const FlowBrowser = () => {
           {isMobile && (
             <button
               onClick={() => setShowMobileOptions(!showMobileOptions)}
-              className="p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400"
+              className="p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 transition-colors"
             >
               <MoreVertical className="w-5 h-5" />
             </button>
@@ -681,7 +618,7 @@ const FlowBrowser = () => {
                 <div className="relative">
                   <button
                     onClick={() => setShowMenu(!showMenu)}
-                    className="p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400"
+                    className="p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 transition-colors"
                   >
                     <User className="w-5 h-5" />
                   </button>
@@ -692,14 +629,14 @@ const FlowBrowser = () => {
                       </div>
                       <button
                         onClick={() => { setShowSettings(true); setShowMenu(false); }}
-                        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-800/50 text-cyan-400 rounded"
+                        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-800/50 text-cyan-400 rounded transition-colors"
                       >
                         <Settings className="w-4 h-4" />
                         Settings
                       </button>
                       <button
                         onClick={handleSignOut}
-                        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-red-500/20 text-red-400 rounded"
+                        className="w-full flex items-center gap-2 px-3 py-2 hover:bg-red-500/20 text-red-400 rounded transition-colors"
                       >
                         <LogOut className="w-4 h-4" />
                         Sign Out
@@ -710,7 +647,7 @@ const FlowBrowser = () => {
               ) : (
                 <button
                   onClick={() => setShowAuth(true)}
-                  className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 text-white text-sm sm:text-base"
+                  className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 text-white text-sm sm:text-base transition-colors"
                 >
                   Sign In
                 </button>
@@ -722,20 +659,20 @@ const FlowBrowser = () => {
 
       {/* Mobile Bottom Navigation */}
       {isMobile && (
-        <div className="bg-black/40 backdrop-blur-xl border-t border-cyan-500/30 px-2 py-2 flex items-center justify-around safe-area-bottom">
-          <button onClick={goBack} disabled={currentTab.historyIndex === 0} className="p-2 text-cyan-400 disabled:opacity-30">
+        <div className="bg-black/40 backdrop-blur-xl border-t border-cyan-500/30 px-2 py-2 flex items-center justify-around safe-area-bottom relative z-40">
+          <button onClick={goBack} className="p-2 text-cyan-400 transition-colors">
             <ChevronLeft className="w-5 h-5" />
           </button>
-          <button onClick={goForward} disabled={currentTab.historyIndex === currentTab.history.length - 1} className="p-2 text-cyan-400 disabled:opacity-30">
+          <button onClick={goForward} className="p-2 text-cyan-400 transition-colors">
             <ChevronRight className="w-5 h-5" />
           </button>
-          <button onClick={reload} className="p-2 text-cyan-400">
+          <button onClick={reload} className="p-2 text-cyan-400 transition-colors">
             <RefreshCw className="w-5 h-5" />
           </button>
-          <button onClick={goHome} className="p-2 text-cyan-400">
+          <button onClick={goHome} className="p-2 text-cyan-400 transition-colors">
             <Home className="w-5 h-5" />
           </button>
-          <button onClick={addTab} className="p-2 text-cyan-400">
+          <button onClick={addTab} className="p-2 text-cyan-400 transition-colors">
             <Plus className="w-5 h-5" />
           </button>
         </div>
@@ -762,7 +699,7 @@ const FlowBrowser = () => {
                     e.stopPropagation();
                     closeTab(index);
                   }}
-                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded"
+                  className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded transition-opacity"
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -771,14 +708,14 @@ const FlowBrowser = () => {
           ))}
           <button
             onClick={addTab}
-            className="p-1.5 sm:p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 ml-2"
+            className="p-1.5 sm:p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 ml-2 transition-colors"
           >
             <Plus className="w-3 h-3 sm:w-4 sm:h-4" />
           </button>
           
           <button
             onClick={() => setShowBookmarks(!showBookmarks)}
-            className="p-1.5 sm:p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 ml-auto"
+            className="p-1.5 sm:p-2 rounded-lg bg-slate-800/50 hover:bg-slate-700/50 text-cyan-400 ml-auto transition-colors"
           >
             <Star className="w-3 h-3 sm:w-4 sm:h-4" />
           </button>
@@ -787,12 +724,12 @@ const FlowBrowser = () => {
 
       {/* Main Content Area */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Browser Content */}
+        {/* Browser Content - Electron BrowserView renders here */}
         <div className="flex-1 relative bg-slate-900">
           {currentTab.url === 'about:blank' ? (
             <div className="w-full h-full flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
               <div className="text-center space-y-4">
-                <div className="w-16 h-16 sm:w-24 sm:h-24 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-2xl sm:rounded-3xl flex items-center justify-center shadow-2xl shadow-cyan-500/50 mx-auto mb-4 sm:mb-6">
+                <div className="w-16 h-16 sm:w-24 sm:h-24 bg-gradient-to-br from-cyan-400 to-blue-600 rounded-2xl sm:rounded-3xl flex items-center justify-center shadow-2xl shadow-cyan-500/50 mx-auto mb-4 sm:mb-6 animate-float">
                   <Globe className="w-8 h-8 sm:w-12 sm:h-12 text-white" />
                 </div>
                 <h1 className="text-3xl sm:text-4xl md:text-6xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent">
@@ -822,45 +759,23 @@ const FlowBrowser = () => {
                     <span className="text-cyan-400 text-xs sm:text-sm">Security: {securityLevel.toUpperCase()}</span>
                   </div>
                 </div>
+                {!isElectron && (
+                  <div className="mt-6 p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                    <p className="text-yellow-400 text-sm">
+                      ⚠️ For full functionality, please use the desktop Electron app
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           ) : (
-            <div className="w-full h-full flex flex-col">
-              <iframe
-                ref={iframeRef}
-                src={displayUrl}
-                className="w-full h-full border-0 bg-white"
-                title="Browser Content"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                referrerPolicy="no-referrer-when-downgrade"
-                onError={(e) => {
-                  console.log('Iframe error:', e);
-                }}
-              />
-              {/* Overlay message for CORS-blocked sites */}
-              <div className="absolute bottom-4 left-4 right-4 bg-slate-900/95 backdrop-blur-xl border border-cyan-500/30 rounded-lg p-3 sm:p-4 shadow-xl pointer-events-none">
-                <div className="flex items-start gap-2 sm:gap-3">
-                  <Globe className="w-4 h-4 sm:w-5 sm:h-5 text-cyan-400 flex-shrink-0 mt-0.5" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs sm:text-sm text-cyan-400 font-medium mb-1">
-                      Loading: {currentTab.title}
-                    </p>
-                    <p className="text-xs text-cyan-400/60 truncate">
-                      {currentTab.url}
-                    </p>
-                    <p className="text-xs text-cyan-400/50 mt-2">
-                      Note: Some sites may block embedding. If the page appears blank, try clicking the URL to open in a new tab.
-                    </p>
-                  </div>
-                  <a
-                    href={currentTab.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="px-2 sm:px-3 py-1.5 sm:py-2 bg-cyan-500 hover:bg-cyan-400 text-white rounded-lg text-xs whitespace-nowrap pointer-events-auto transition-colors"
-                  >
-                    Open ↗
-                  </a>
-                </div>
+            <div className="w-full h-full bg-slate-900 flex items-center justify-center">
+              <div className="text-center space-y-4">
+                <Loader2 className="w-12 h-12 text-cyan-400 animate-spin mx-auto" />
+                <p className="text-cyan-400 text-sm">Loading: {currentTab.title}</p>
+                <p className="text-cyan-400/50 text-xs max-w-md px-4">
+                  The page is rendering in a native browser view
+                </p>
               </div>
             </div>
           )}
@@ -874,7 +789,7 @@ const FlowBrowser = () => {
                 <Sparkles className="w-5 h-5 text-purple-400" />
                 <h3 className="text-lg font-bold text-cyan-400">AI Assistant</h3>
               </div>
-              <button onClick={() => setShowAIPanel(false)} className="p-1 hover:bg-slate-800/50 rounded">
+              <button onClick={() => setShowAIPanel(false)} className="p-1 hover:bg-slate-800/50 rounded transition-colors">
                 <X className="w-5 h-5 text-cyan-400" />
               </button>
             </div>
@@ -933,7 +848,7 @@ const FlowBrowser = () => {
                 <button
                   onClick={handleAISummarize}
                   disabled={aiLoading}
-                  className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50"
+                  className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50 transition-opacity"
                 >
                   {aiLoading ? (
                     <div className="flex items-center justify-center gap-2">
@@ -958,7 +873,7 @@ const FlowBrowser = () => {
                   <button
                     onClick={handleAIQuestion}
                     disabled={aiLoading || !aiQuestion.trim()}
-                    className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50"
+                    className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50 transition-opacity"
                   >
                     {aiLoading ? (
                       <div className="flex items-center justify-center gap-2">
@@ -976,7 +891,7 @@ const FlowBrowser = () => {
                 <button
                   onClick={handleAIExplain}
                   disabled={aiLoading}
-                  className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50"
+                  className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50 transition-opacity"
                 >
                   {aiLoading ? (
                     <div className="flex items-center justify-center gap-2">
@@ -993,7 +908,7 @@ const FlowBrowser = () => {
                 <button
                   onClick={() => handleAITranslate('Spanish')}
                   disabled={aiLoading}
-                  className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50"
+                  className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50 transition-opacity"
                 >
                   {aiLoading ? (
                     <div className="flex items-center justify-center gap-2">
@@ -1014,7 +929,7 @@ const FlowBrowser = () => {
                       <Sparkles className="w-4 h-4 text-purple-400" />
                       <span className="text-sm text-purple-400 font-semibold">AI Response</span>
                     </div>
-                    <button onClick={copyAIResponse} className="p-1 hover:bg-slate-700/50 rounded">
+                    <button onClick={copyAIResponse} className="p-1 hover:bg-slate-700/50 rounded transition-colors">
                       <Copy className="w-4 h-4 text-cyan-400" />
                     </button>
                   </div>
@@ -1033,17 +948,17 @@ const FlowBrowser = () => {
             <div className="p-4">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-cyan-400">Bookmarks</h3>
-                <button onClick={() => setShowBookmarks(false)} className="p-1 hover:bg-slate-800/50 rounded">
+                <button onClick={() => setShowBookmarks(false)} className="p-1 hover:bg-slate-800/50 rounded transition-colors">
                   <X className="w-5 h-5 text-cyan-400" />
                 </button>
               </div>
               <div className="space-y-2">
                 {bookmarks.map((bookmark) => (
-                  <div key={bookmark.id} className="group flex items-center gap-2 p-3 bg-slate-800/50 rounded-lg hover:bg-slate-700/50">
+                  <div key={bookmark.id} className="group flex items-center gap-2 p-3 bg-slate-800/50 rounded-lg hover:bg-slate-700/50 transition-colors">
                     <Globe className="w-4 h-4 text-cyan-400 flex-shrink-0" />
                     <div className="flex-1 min-w-0">
                       <div 
-                        className="text-sm text-cyan-400 truncate cursor-pointer hover:text-cyan-300"
+                        className="text-sm text-cyan-400 truncate cursor-pointer hover:text-cyan-300 transition-colors"
                         onClick={() => {
                           navigateToUrl(bookmark.url);
                           setShowBookmarks(false);
@@ -1055,7 +970,7 @@ const FlowBrowser = () => {
                     </div>
                     <button
                       onClick={() => removeBookmark(bookmark.id)}
-                      className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded"
+                      className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded transition-all"
                     >
                       <X className="w-4 h-4 text-red-400" />
                     </button>
@@ -1076,13 +991,13 @@ const FlowBrowser = () => {
       {showMobileMenu && isMobile && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50" onClick={() => setShowMobileMenu(false)}>
           <div 
-            className="absolute left-0 top-0 bottom-0 w-4/5 max-w-sm bg-slate-900 border-r border-cyan-500/30 shadow-2xl overflow-y-auto"
+            className="absolute left-0 top-0 bottom-0 w-4/5 max-w-sm bg-slate-900 border-r border-cyan-500/30 shadow-2xl overflow-y-auto safe-area-bottom"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-4">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-xl font-bold text-cyan-400">Menu</h2>
-                <button onClick={() => setShowMobileMenu(false)} className="p-1 hover:bg-slate-800/50 rounded">
+                <button onClick={() => setShowMobileMenu(false)} className="p-1 hover:bg-slate-800/50 rounded transition-colors">
                   <X className="w-6 h-6 text-cyan-400" />
                 </button>
               </div>
@@ -1113,7 +1028,7 @@ const FlowBrowser = () => {
                   })}
                   <button
                     onClick={() => { setShowNewWorkspace(true); setShowMobileMenu(false); }}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 border border-dashed border-cyan-500/30"
+                    className="w-full flex items-center gap-3 p-3 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 border border-dashed border-cyan-500/30 transition-colors"
                   >
                     <Plus className="w-5 h-5 text-cyan-400" />
                     <span className="text-cyan-400">New Workspace</span>
@@ -1129,7 +1044,7 @@ const FlowBrowser = () => {
                     <div
                       key={tab.id}
                       onClick={() => { setActiveTab(index); setShowMobileMenu(false); }}
-                      className={`flex items-center gap-2 p-3 rounded-lg cursor-pointer ${
+                      className={`flex items-center gap-2 p-3 rounded-lg cursor-pointer transition-colors ${
                         activeTab === index
                           ? 'bg-cyan-500/20 border border-cyan-500/30'
                           : 'bg-slate-800/30 hover:bg-slate-800/50'
@@ -1145,7 +1060,7 @@ const FlowBrowser = () => {
                             e.stopPropagation();
                             closeTab(index);
                           }}
-                          className="p-1 hover:bg-red-500/20 rounded"
+                          className="p-1 hover:bg-red-500/20 rounded transition-colors"
                         >
                           <X className="w-4 h-4 text-red-400" />
                         </button>
@@ -1161,21 +1076,21 @@ const FlowBrowser = () => {
                 <div className="space-y-2">
                   <button
                     onClick={() => { setShowBookmarks(true); setShowMobileMenu(false); }}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 text-cyan-400"
+                    className="w-full flex items-center gap-3 p-3 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 text-cyan-400 transition-colors"
                   >
                     <Star className="w-5 h-5" />
                     <span>Bookmarks ({bookmarks.length})</span>
                   </button>
                   <button
                     onClick={() => { addBookmark(); setShowMobileMenu(false); }}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 text-cyan-400"
+                    className="w-full flex items-center gap-3 p-3 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 text-cyan-400 transition-colors"
                   >
                     <Plus className="w-5 h-5" />
                     <span>Add Bookmark</span>
                   </button>
                   <button
                     onClick={() => { setShowAIPanel(true); setShowMobileMenu(false); }}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/30 text-purple-400"
+                    className="w-full flex items-center gap-3 p-3 rounded-lg bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/30 text-purple-400 transition-colors"
                   >
                     <Sparkles className="w-5 h-5" />
                     <span>AI Assistant</span>
@@ -1189,7 +1104,7 @@ const FlowBrowser = () => {
                 <div className="space-y-2">
                   <button
                     onClick={toggleProxy}
-                    className={`w-full flex items-center justify-between p-3 rounded-lg ${
+                    className={`w-full flex items-center justify-between p-3 rounded-lg transition-colors ${
                       proxyEnabled
                         ? 'bg-green-500/20 border border-green-500/30'
                         : 'bg-slate-800/30'
@@ -1205,7 +1120,7 @@ const FlowBrowser = () => {
                   </button>
                   <button
                     onClick={toggleVPN}
-                    className={`w-full flex items-center justify-between p-3 rounded-lg ${
+                    className={`w-full flex items-center justify-between p-3 rounded-lg transition-colors ${
                       vpnEnabled
                         ? 'bg-purple-500/20 border border-purple-500/30'
                         : 'bg-slate-800/30'
@@ -1226,7 +1141,7 @@ const FlowBrowser = () => {
               <div className="space-y-2">
                 <button
                   onClick={() => { setShowSettings(true); setShowMobileMenu(false); }}
-                  className="w-full flex items-center gap-3 p-3 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 text-cyan-400"
+                  className="w-full flex items-center gap-3 p-3 rounded-lg bg-slate-800/30 hover:bg-slate-800/50 text-cyan-400 transition-colors"
                 >
                   <Settings className="w-5 h-5" />
                   <span>Settings</span>
@@ -1234,7 +1149,7 @@ const FlowBrowser = () => {
                 {user ? (
                   <button
                     onClick={handleSignOut}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400"
+                    className="w-full flex items-center gap-3 p-3 rounded-lg bg-red-500/20 hover:bg-red-500/30 text-red-400 transition-colors"
                   >
                     <LogOut className="w-5 h-5" />
                     <span>Sign Out</span>
@@ -1242,7 +1157,7 @@ const FlowBrowser = () => {
                 ) : (
                   <button
                     onClick={() => { setShowAuth(true); setShowMobileMenu(false); }}
-                    className="w-full flex items-center gap-3 p-3 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 text-white"
+                    className="w-full flex items-center gap-3 p-3 rounded-lg bg-gradient-to-r from-cyan-500 to-blue-600 text-white transition-colors"
                   >
                     <User className="w-5 h-5" />
                     <span>Sign In</span>
@@ -1265,21 +1180,21 @@ const FlowBrowser = () => {
             <div className="space-y-2">
               <button
                 onClick={() => { addBookmark(); setShowMobileOptions(false); }}
-                className="w-full flex items-center gap-3 p-4 rounded-lg bg-slate-800/50 text-cyan-400"
+                className="w-full flex items-center gap-3 p-4 rounded-lg bg-slate-800/50 text-cyan-400 transition-colors"
               >
                 <Star className="w-5 h-5" />
                 <span>Add Bookmark</span>
               </button>
               <button
                 onClick={() => { setShowAIPanel(true); setShowMobileOptions(false); }}
-                className="w-full flex items-center gap-3 p-4 rounded-lg bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/30 text-purple-400"
+                className="w-full flex items-center gap-3 p-4 rounded-lg bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-500/30 text-purple-400 transition-colors"
               >
                 <Sparkles className="w-5 h-5" />
                 <span>AI Assistant</span>
               </button>
               <button
                 onClick={() => { toggleProxy(); setShowMobileOptions(false); }}
-                className={`w-full flex items-center gap-3 p-4 rounded-lg ${
+                className={`w-full flex items-center gap-3 p-4 rounded-lg transition-colors ${
                   proxyEnabled
                     ? 'bg-green-500/20 border border-green-500/30 text-green-400'
                     : 'bg-slate-800/50 text-cyan-400'
@@ -1291,7 +1206,7 @@ const FlowBrowser = () => {
               {user && (
                 <button
                   onClick={() => { setShowSettings(true); setShowMobileOptions(false); }}
-                  className="w-full flex items-center gap-3 p-4 rounded-lg bg-slate-800/50 text-cyan-400"
+                  className="w-full flex items-center gap-3 p-4 rounded-lg bg-slate-800/50 text-cyan-400 transition-colors"
                 >
                   <Settings className="w-5 h-5" />
                   <span>Settings</span>
@@ -1314,17 +1229,16 @@ const FlowBrowser = () => {
                 <Sparkles className="w-5 h-5 text-purple-400" />
                 <h3 className="text-lg font-bold text-cyan-400">AI Assistant</h3>
               </div>
-              <button onClick={() => setShowAIPanel(false)} className="p-1 hover:bg-slate-800/50 rounded">
+              <button onClick={() => setShowAIPanel(false)} className="p-1 hover:bg-slate-800/50 rounded transition-colors">
                 <X className="w-5 h-5 text-cyan-400" />
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
-              {/* AI Mode Selector */}
               <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => { setAiMode('summarize'); setAiResponse(''); }}
-                  className={`p-3 rounded-lg border ${
+                  className={`p-3 rounded-lg border transition-all ${
                     aiMode === 'summarize'
                       ? 'bg-purple-500/20 border-purple-500/30 text-purple-400'
                       : 'bg-slate-800/30 border-slate-700 text-cyan-400/70'
@@ -1335,7 +1249,7 @@ const FlowBrowser = () => {
                 </button>
                 <button
                   onClick={() => { setAiMode('qa'); setAiResponse(''); }}
-                  className={`p-3 rounded-lg border ${
+                  className={`p-3 rounded-lg border transition-all ${
                     aiMode === 'qa'
                       ? 'bg-purple-500/20 border-purple-500/30 text-purple-400'
                       : 'bg-slate-800/30 border-slate-700 text-cyan-400/70'
@@ -1346,7 +1260,7 @@ const FlowBrowser = () => {
                 </button>
                 <button
                   onClick={() => { setAiMode('explain'); setAiResponse(''); }}
-                  className={`p-3 rounded-lg border ${
+                  className={`p-3 rounded-lg border transition-all ${
                     aiMode === 'explain'
                       ? 'bg-purple-500/20 border-purple-500/30 text-purple-400'
                       : 'bg-slate-800/30 border-slate-700 text-cyan-400/70'
@@ -1357,7 +1271,7 @@ const FlowBrowser = () => {
                 </button>
                 <button
                   onClick={() => { setAiMode('translate'); setAiResponse(''); }}
-                  className={`p-3 rounded-lg border ${
+                  className={`p-3 rounded-lg border transition-all ${
                     aiMode === 'translate'
                       ? 'bg-purple-500/20 border-purple-500/30 text-purple-400'
                       : 'bg-slate-800/30 border-slate-700 text-cyan-400/70'
@@ -1368,12 +1282,11 @@ const FlowBrowser = () => {
                 </button>
               </div>
 
-              {/* Rest of AI content same as desktop */}
               {aiMode === 'summarize' && (
                 <button
                   onClick={handleAISummarize}
                   disabled={aiLoading}
-                  className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50"
+                  className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50 transition-opacity"
                 >
                   {aiLoading ? 'Processing...' : 'Summarize Page'}
                 </button>
@@ -1391,7 +1304,7 @@ const FlowBrowser = () => {
                   <button
                     onClick={handleAIQuestion}
                     disabled={aiLoading || !aiQuestion.trim()}
-                    className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50"
+                    className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50 transition-opacity"
                   >
                     {aiLoading ? 'Processing...' : 'Get Answer'}
                   </button>
@@ -1402,7 +1315,7 @@ const FlowBrowser = () => {
                 <button
                   onClick={handleAIExplain}
                   disabled={aiLoading}
-                  className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50"
+                  className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50 transition-opacity"
                 >
                   {aiLoading ? 'Processing...' : 'Explain Simply'}
                 </button>
@@ -1412,7 +1325,7 @@ const FlowBrowser = () => {
                 <button
                   onClick={() => handleAITranslate('Spanish')}
                   disabled={aiLoading}
-                  className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50"
+                  className="w-full py-3 rounded-lg bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold disabled:opacity-50 transition-opacity"
                 >
                   {aiLoading ? 'Processing...' : 'Translate to Spanish'}
                 </button>
@@ -1425,7 +1338,7 @@ const FlowBrowser = () => {
                       <Sparkles className="w-4 h-4 text-purple-400" />
                       <span className="text-sm text-purple-400 font-semibold">Response</span>
                     </div>
-                    <button onClick={copyAIResponse} className="p-1 hover:bg-slate-700/50 rounded">
+                    <button onClick={copyAIResponse} className="p-1 hover:bg-slate-700/50 rounded transition-colors">
                       <Copy className="w-4 h-4 text-cyan-400" />
                     </button>
                   </div>
@@ -1449,7 +1362,7 @@ const FlowBrowser = () => {
             <div className="p-4">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-bold text-cyan-400">Bookmarks</h3>
-                <button onClick={() => setShowBookmarks(false)} className="p-1 hover:bg-slate-800/50 rounded">
+                <button onClick={() => setShowBookmarks(false)} className="p-1 hover:bg-slate-800/50 rounded transition-colors">
                   <X className="w-5 h-5 text-cyan-400" />
                 </button>
               </div>
@@ -1469,7 +1382,7 @@ const FlowBrowser = () => {
                     </div>
                     <button
                       onClick={() => removeBookmark(bookmark.id)}
-                      className="p-1 hover:bg-red-500/20 rounded"
+                      className="p-1 hover:bg-red-500/20 rounded transition-colors"
                     >
                       <X className="w-4 h-4 text-red-400" />
                     </button>
@@ -1495,7 +1408,7 @@ const FlowBrowser = () => {
           >
             <div className="flex items-center justify-between mb-4 sm:mb-6">
               <h2 className="text-xl sm:text-2xl font-bold text-cyan-400">Workspaces</h2>
-              <button onClick={() => setShowWorkspaces(false)} className="p-1 hover:bg-slate-800/50 rounded">
+              <button onClick={() => setShowWorkspaces(false)} className="p-1 hover:bg-slate-800/50 rounded transition-colors">
                 <X className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-400" />
               </button>
             </div>
@@ -1523,7 +1436,7 @@ const FlowBrowser = () => {
                           e.stopPropagation();
                           deleteWorkspace(index);
                         }}
-                        className="absolute top-2 sm:top-3 right-2 sm:right-3 opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded"
+                        className="absolute top-2 sm:top-3 right-2 sm:right-3 opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded transition-all"
                       >
                         <X className="w-3 h-3 sm:w-4 sm:h-4 text-red-400" />
                       </button>
@@ -1553,7 +1466,7 @@ const FlowBrowser = () => {
           >
             <div className="flex items-center justify-between mb-4 sm:mb-6">
               <h2 className="text-xl sm:text-2xl font-bold text-cyan-400">Create Workspace</h2>
-              <button onClick={() => setShowNewWorkspace(false)} className="p-1 hover:bg-slate-800/50 rounded">
+              <button onClick={() => setShowNewWorkspace(false)} className="p-1 hover:bg-slate-800/50 rounded transition-colors">
                 <X className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-400" />
               </button>
             </div>
@@ -1589,7 +1502,7 @@ const FlowBrowser = () => {
               <h2 className="text-xl sm:text-2xl font-bold text-cyan-400">
                 {authMode === 'signin' ? 'Sign In' : 'Sign Up'}
               </h2>
-              <button onClick={() => setShowAuth(false)} className="p-1 hover:bg-slate-800/50 rounded">
+              <button onClick={() => setShowAuth(false)} className="p-1 hover:bg-slate-800/50 rounded transition-colors">
                 <X className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-400" />
               </button>
             </div>
@@ -1619,7 +1532,7 @@ const FlowBrowser = () => {
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-cyan-400/50"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-cyan-400/50 transition-colors"
                   >
                     {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
                   </button>
@@ -1628,7 +1541,7 @@ const FlowBrowser = () => {
 
               <button
                 type="submit"
-                className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white py-2.5 sm:py-3 rounded-lg font-semibold text-sm sm:text-base"
+                className="w-full bg-gradient-to-r from-cyan-500 to-blue-600 text-white py-2.5 sm:py-3 rounded-lg font-semibold text-sm sm:text-base transition-colors"
               >
                 {authMode === 'signin' ? 'Sign In' : 'Sign Up'}
               </button>
@@ -1636,7 +1549,7 @@ const FlowBrowser = () => {
 
             <button
               onClick={() => setAuthMode(authMode === 'signin' ? 'signup' : 'signin')}
-              className="w-full text-center text-cyan-400/70 mt-4 text-xs sm:text-sm"
+              className="w-full text-center text-cyan-400/70 mt-4 text-xs sm:text-sm transition-colors hover:text-cyan-400"
             >
               {authMode === 'signin' 
                 ? "Don't have an account? Sign up" 
@@ -1655,7 +1568,7 @@ const FlowBrowser = () => {
           >
             <div className="flex items-center justify-between mb-4 sm:mb-6">
               <h2 className="text-xl sm:text-2xl font-bold text-cyan-400">Settings</h2>
-              <button onClick={() => setShowSettings(false)} className="p-1 hover:bg-slate-800/50 rounded">
+              <button onClick={() => setShowSettings(false)} className="p-1 hover:bg-slate-800/50 rounded transition-colors">
                 <X className="w-5 h-5 sm:w-6 sm:h-6 text-cyan-400" />
               </button>
             </div>
@@ -1668,7 +1581,6 @@ const FlowBrowser = () => {
                   Security & Privacy
                 </h3>
                 <div className="space-y-2 sm:space-y-3">
-                  {/* Proxy Toggle */}
                   <div className="flex items-center justify-between p-3 sm:p-4 bg-slate-800/30 rounded-lg border border-cyan-500/20">
                     <div>
                       <div className="text-cyan-400 font-medium text-sm sm:text-base">Proxy Protection</div>
@@ -1676,7 +1588,7 @@ const FlowBrowser = () => {
                     </div>
                     <button
                       onClick={toggleProxy}
-                      className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm ${
+                      className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm transition-colors ${
                         proxyEnabled
                           ? 'bg-green-500/20 text-green-400 border border-green-500/30'
                           : 'bg-slate-700/50 text-cyan-400 border border-cyan-500/20'
@@ -1686,7 +1598,6 @@ const FlowBrowser = () => {
                     </button>
                   </div>
 
-                  {/* VPN Toggle */}
                   <div className="p-3 sm:p-4 bg-slate-800/30 rounded-lg border border-cyan-500/20 space-y-3">
                     <div className="flex items-center justify-between">
                       <div>
@@ -1695,7 +1606,7 @@ const FlowBrowser = () => {
                       </div>
                       <button
                         onClick={toggleVPN}
-                        className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm ${
+                        className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm transition-colors ${
                           vpnEnabled
                             ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30'
                             : 'bg-slate-700/50 text-cyan-400 border border-cyan-500/20'
@@ -1723,7 +1634,6 @@ const FlowBrowser = () => {
                     )}
                   </div>
 
-                  {/* Other Security Settings */}
                   <div className="flex items-center justify-between p-3 sm:p-4 bg-slate-800/30 rounded-lg border border-cyan-500/20">
                     <div>
                       <div className="text-cyan-400 font-medium text-sm sm:text-base">Anti-Fingerprinting</div>
@@ -1731,7 +1641,7 @@ const FlowBrowser = () => {
                     </div>
                     <button
                       onClick={() => setAntiFingerprint(!antiFingerprint)}
-                      className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm ${
+                      className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm transition-colors ${
                         antiFingerprint
                           ? 'bg-green-500/20 text-green-400 border border-green-500/30'
                           : 'bg-slate-700/50 text-cyan-400 border border-cyan-500/20'
@@ -1748,7 +1658,7 @@ const FlowBrowser = () => {
                     </div>
                     <button
                       onClick={() => setBlockTrackers(!blockTrackers)}
-                      className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm ${
+                      className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg text-xs sm:text-sm transition-colors ${
                         blockTrackers
                           ? 'bg-green-500/20 text-green-400 border border-green-500/30'
                           : 'bg-slate-700/50 text-cyan-400 border border-cyan-500/20'
@@ -1786,6 +1696,10 @@ const FlowBrowser = () => {
                     <span className="text-cyan-400">2.0.0</span>
                   </div>
                   <div className="flex justify-between">
+                    <span className="text-cyan-400/70">Platform:</span>
+                    <span className="text-cyan-400">{isElectron ? 'Electron Desktop' : 'Web'}</span>
+                  </div>
+                  <div className="flex justify-between">
                     <span className="text-cyan-400/70">Workspaces:</span>
                     <span className="text-cyan-400">{workspaces.length}</span>
                   </div>
@@ -1807,7 +1721,7 @@ const FlowBrowser = () => {
   );
 };
 
-// Mount the app
+// Mount the app 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <FlowBrowser />
